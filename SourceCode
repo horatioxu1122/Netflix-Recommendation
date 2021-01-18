@@ -1,0 +1,200 @@
+import os
+import pandas as pd
+import seaborn as sb
+import matplotlib.pyplot as plt
+import plotly.express as pl
+from collections import Counter
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+for directory, _, filenames in os.walk('C:/Users/'):
+    for filename in filenames:
+        print(os.path.join(directory, filename))
+
+# read dataset
+netflix = pd.read_csv("netflix_titles.csv")
+print(netflix.head())
+netflix_shows = netflix[netflix['type'] == 'TV Show']
+netflix_movies = netflix[netflix['type'] == 'Movie']
+
+# show movies or shows count plot
+sb.set(style="whitegrid")
+sb.countplot(x="type", data=netflix, palette="Set2")
+plt.show()
+
+# show movies rating count plot
+plt.figure(figsize=(12, 10))
+sb.set(style="whitegrid")
+sb.countplot(x="rating", data=netflix_movies, palette="Set2", order=netflix_movies['rating'].value_counts().index[0:15])
+plt.show()
+
+imdb_ratings = pd.read_csv('IMDb ratings.csv',
+                           usecols=['weighted_average_vote'])
+imdb_titles = pd.read_csv('IMDb movies.csv',
+                          usecols=['title', 'year', 'genre'])
+ratings = pd.DataFrame({'Title': imdb_titles.title,
+                        'Release Year': imdb_titles.year,
+                        'Rating': imdb_ratings.weighted_average_vote,
+                        'Genre': imdb_titles.genre})
+ratings.drop_duplicates(subset=['Title', 'Release Year', 'Rating'], inplace=True)
+ratings.dropna()
+
+# perform joint
+joint_data = ratings.merge(netflix, left_on='Title', right_on='title', how='inner')
+joint_data = joint_data.sort_values(by='Rating', ascending=False)
+
+# introducing top 10 rated movies on Netflix
+top_rated = joint_data[0:10]
+fig = pl.sunburst(
+    top_rated,
+    path=['title', 'country'],
+    values='Rating',
+    color='Rating')
+fig.show()
+
+# countries with highest rated content
+country_count = joint_data['country'].value_counts().sort_values(ascending=False)
+country_count = pd.DataFrame(country_count)
+top_countries = country_count[0:11]
+print(top_countries)
+
+# number of movies released each year
+plt.figure(figsize=(12, 10))
+sb.set(style="whitegrid")
+sb.countplot(y="release_year", data=netflix_movies, palette="Set2",
+             order=netflix_movies['release_year'].value_counts().index[0:15])
+plt.show()
+
+# duration of movies
+netflix_movies['duration'] = netflix_movies['duration'].str.replace(' min', '')
+netflix_movies['duration'] = netflix_movies['duration'].astype(str).astype(int)
+sb.set(style="darkgrid")
+sb.kdeplot(data=netflix_movies['duration'], shade=True)
+plt.show()
+
+# count genres
+genres = list(netflix_movies['listed_in'])
+gen = []
+for i in genres:
+    i = list(i.split(','))
+    for j in i:
+        gen.append(j.replace(' ', ""))
+g = Counter(gen)
+print(g)
+
+# tv
+countries1 = {}
+netflix_shows['country'] = netflix_shows['country'].fillna('Unknown')
+cou1 = list(netflix_shows['country'])
+for i in cou1:
+    # print(i)
+    i = list(i.split(','))
+    if len(i) == 1:
+        if i in list(countries1.keys()):
+            countries1[i] += 1
+        else:
+            countries1[i[0]] = 1
+    else:
+        for j in i:
+            if j in list(countries1.keys()):
+                countries1[j] += 1
+            else:
+                countries1[j] = 1
+
+countries_fin1 = {}
+for country, no in countries1.items():
+    country = country.replace(' ', '')
+    if country in list(countries_fin1.keys()):
+        countries_fin1[country] += no
+    else:
+        countries_fin1[country] = no
+
+countries_fin1 = {k: v for k, v in sorted(countries_fin1.items(), key=lambda item: item[1], reverse=True)}
+
+# which country gives the most content
+plt.figure(figsize=(15, 15))
+sb.barplot(y=list(countries_fin1.keys()), x=list(countries_fin1.values()))
+plt.ylabel("Arrival delay (in minutes)")
+plt.show()
+
+# number of seasons
+features = ['title', 'duration']
+durations = netflix_shows[features]
+durations['no_of_seasons'] = durations['duration'].str.replace(' Season', '')
+durations['no_of_seasons'] = durations['no_of_seasons'].str.replace('s', '')
+durations['no_of_seasons'] = durations['no_of_seasons'].astype(str).astype(int)
+t = ['title', 'no_of_seasons']
+top = durations[t]
+top = top.sort_values(by='no_of_seasons', ascending=False)
+top20 = top[0:20]
+top20.plot(kind='bar', x='title', y='no_of_seasons', color='red')
+
+# tv genres
+tv_genres = list(netflix_shows['listed_in'])
+tv_gen = []
+for i in tv_genres:
+    i = list(i.split(','))
+    for j in i:
+        tv_gen.append(j.replace(' ', ""))
+tv_g = Counter(gen)
+print(tv_g)
+
+# Content based recommendation begins
+tfidf = TfidfVectorizer(stop_words='english')
+netflix['description'] = netflix['description'].fillna('')
+tfidf_matrix = tfidf.fit_transform(netflix['description'])
+print(tfidf_matrix.shape)
+cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
+indices = pd.Series(netflix.index, index=netflix['title']).drop_duplicates()
+
+
+def get_recommendations(title, cosine_sim=cosine_sim):
+    idx = indices[title]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    sim_scores = sim_scores[1:11]
+    movie_indices = [i[0] for i in sim_scores]
+    return netflix['title'].iloc[movie_indices]
+
+
+# print(get_recommendations(''))
+
+# multiple filters recommendation like director, cast, genre, etc
+fill_na = netflix.fillna('')
+
+
+def clean_data(x):
+    return str.lower(x.replace(" ", ""))
+
+
+features = ['title', 'director', 'cast', 'listed_in', 'description']
+fill_na = fill_na[features]
+for feature in features:
+    fill_na[feature] = fill_na[feature].apply(clean_data)
+
+
+def create_soup(x):
+    return x['title'] + ' ' + x['director'] + ' ' + x['cast'] + ' ' + x['listed_in'] + ' ' + x['description']
+
+
+fill_na['soup'] = fill_na.apply(create_soup, axis=1)
+count = CountVectorizer(stop_words='english')
+count_matrix = count.fit_transform(fill_na['soup'])
+cosine_sim2 = cosine_similarity(count_matrix, count_matrix)
+fill_na = fill_na.reset_index()
+indices = pd.Series(fill_na.index, index=fill_na['title'])
+
+
+def get_recommendations_new(title, cosine_sim=cosine_sim):
+    title = title.replace(' ', '').lower()
+    idx = indices[title]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    sim_scores = sim_scores[1:11]
+    movie_indices = [i[0] for i in sim_scores]
+    return netflix['title'].iloc[movie_indices]
+
+
+# print(get_recommendations_new('', cosine_sim2))
